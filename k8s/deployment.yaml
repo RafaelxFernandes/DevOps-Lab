@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-lab
+  namespace: devops-lab
+spec:
+  replicas: 2                          # run 2 copies
+  selector:
+    matchLabels:
+      app: devops-lab                  # "my pods are the ones with this label"
+  template:                            # the blueprint for each Pod
+    metadata:
+      labels:
+        app: devops-lab
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret            # the Secret from step 2
+      containers:
+        - name: web
+          image: ghcr.io/rafaelxfernandes/devops-lab:1.2.0
+          ports:
+            - containerPort: 5000
+          readinessProbe:              # "is it ready to receive traffic?"
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:               # "is it still alive? if not, restart it"
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:                  # what the scheduler reserves
+              cpu: 50m
+              memory: 64Mi
+            limits:                    # hard ceiling
+              cpu: 250m
+              memory: 128Mi 

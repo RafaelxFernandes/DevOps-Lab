@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-lab
+  namespace: devops-lab
+spec:
+  type: LoadBalancer      # Docker Desktop exposes this on localhost
+  selector:
+    app: devops-lab       # send traffic to pods with this label
+  ports:
+    - port: 8080          # port on localhost
+      targetPort: 5000    # port inside the container
