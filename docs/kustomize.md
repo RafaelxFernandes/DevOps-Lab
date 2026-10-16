@@ -4,7 +4,7 @@
 
 A standalone example of **Kustomize**, the main alternative to Helm, using the same app in two environments: **dev** and **prod**.
 
-> **Not part of the live flow.** Nothing references the `kustomize/` folder: CI ignores it and Argo CD doesn't deploy it (only `argocd/apps/` is deployed). The real app still uses the Helm chart. This folder is for learning and for later reference.
+> **Not part of the main app flow.** The real app (`localhost:8080`) still uses the Helm chart. Since Terraform step T5, these overlays can be deployed as two extra environments, **dev** (`localhost:8081`) and **prod** (`localhost:8082`), by `terraform/environments` (see [terraform.md](terraform.md)). Without that, nothing deploys this folder.
 
 **Contents**
 
@@ -50,13 +50,13 @@ kustomize/
 │   └── service.yaml             #   LoadBalancer on port 8080
 └── overlays/
     ├── dev/
-    │   ├── kustomization.yaml   # base + namespace devops-lab-dev, 1 replica, tag 1.5.0, port 8081
-    │   └── namespace.yaml
+    │   └── kustomization.yaml   # base + namespace devops-lab-dev, 1 replica, tag 1.5.0, port 8081
     └── prod/
         ├── kustomization.yaml   # base + namespace devops-lab-prod, 3 replicas, tag 1.4.0, port 8082
-        ├── namespace.yaml
         └── resources-patch.yaml # more CPU/memory
 ```
+
+> Until T5 each overlay also had a `namespace.yaml` creating its namespace. It was removed when Terraform took over the namespaces (together with their pull secrets): one owner per object.
 
 | | base | dev | prod |
 |---|---|---|---|
@@ -95,7 +95,6 @@ namespace: devops-lab-prod          # put EVERY resource in this namespace
 
 resources:
   - ../../base                      # start from the base
-  - namespace.yaml                  # + create the namespace
 
 labels:
   - pairs:
@@ -184,12 +183,13 @@ curl http://localhost:8081/                   # dev  → 1.5.0 greeting
 curl http://localhost:8082/                   # prod → 1.4.0 greeting
 ```
 
-Clean up (deleting the namespace also deletes its Secret):
+Clean up (deleting a namespace also deletes everything in it, Secret included):
 
 ```bash
-kubectl delete -k kustomize/overlays/dev
-kubectl delete -k kustomize/overlays/prod
+kubectl delete namespace devops-lab-dev devops-lab-prod
 ```
+
+> If the environments were created by Terraform (T5), remove them with Terraform instead (`terraform destroy` in `terraform/environments`), otherwise Terraform's state no longer matches the cluster.
 
 > Applying by hand is fine for learning. In the real flow, Argo CD would apply them (next sections).
 
@@ -209,7 +209,9 @@ Each environment's version is one line in git, so "what runs where" is always vi
 
 ## Deploying the overlays with Argo CD
 
-To make Argo CD manage dev and prod, add one Application per environment to `argocd/apps/`. The root app (app of apps) picks them up automatically:
+> **Implemented in Terraform step T5** a different way: a Terraform module creates, per environment, the namespace, the pull secret **and** the Application. The git-only alternative below is kept for comparison.
+
+To make Argo CD manage dev and prod from git only, add one Application per environment to `argocd/apps/`. The root app (app of apps) picks them up automatically:
 
 ```yaml
 # argocd/apps/devops-lab-dev.yaml   (copy it for prod: change "dev" → "prod")
@@ -234,7 +236,7 @@ spec:
 ```
 
 Things to know before doing it:
-- `ghcr-secret` must exist in `devops-lab-dev` / `devops-lab-prod` (add them to `scripts/bootstrap.sh` so a rebuild creates them).
+- the namespaces and `ghcr-secret` must exist in `devops-lab-dev` / `devops-lab-prod` first (that's what the Terraform module solves).
 - Each environment is a separate Application with its own sync and health status in the UI.
 - The automated bump PR (`bump-version` job) only edits the Helm chart today; for Kustomize, the job would run `kustomize edit set image ...` in `overlays/dev` instead of `yq`.
 

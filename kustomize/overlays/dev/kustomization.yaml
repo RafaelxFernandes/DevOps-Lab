@@ -7,7 +7,8 @@ namespace: devops-lab-dev          # put EVERY resource in this namespace
 
 resources:
   - ../../base                     # start from the shared base
-  - namespace.yaml                 # + create the namespace itself
+  # The namespace itself is created by Terraform (terraform/modules/app-environment),
+  # together with its image pull secret, so it is not part of the overlay.
 
 labels:                            # add this label to every resource...
   - pairs:
