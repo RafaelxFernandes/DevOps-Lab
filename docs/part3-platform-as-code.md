@@ -106,7 +106,7 @@ spec:
 | `prune: false` | deliberate exception: for the tool that runs everything, refuse automatic deletion |
 | `ServerSideApply=true` | same reason as `--server-side` in the manual install |
 
-**Version pinning:** chart `10.7.1` appears in **two places**, `argocd/apps/argocd.yaml` and `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh`. Keep them equal, or a fresh bootstrap installs a different version than git describes (Argo CD would then upgrade or downgrade itself right after).
+**Version pinning:** chart `10.7.1` appears in **three places**: `argocd/apps/argocd.yaml`, `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh`, and (since Terraform step T3) `argocd_chart_version` in `terraform/cluster/variables.tf`. Keep them equal, or a fresh bootstrap installs a different version than git describes (Argo CD would then upgrade or downgrade itself right after).
 
 ### `platform/argocd/values.yaml`: Argo CD's own config, in git
 

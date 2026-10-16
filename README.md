@@ -32,7 +32,7 @@ developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
 | [Part 1: by hand](docs/part1-by-hand.md) | steps 1–5 + bonus: app, Docker, GitHub Actions, ghcr.io, Kubernetes, kind in CI |
 | [Part 2: real-world tools](docs/part2-real-world-tools.md) | steps 6–8: Helm, automated version-bump PR, Argo CD |
 | [Part 3: platform as code](docs/part3-platform-as-code.md) | step 9: bootstrap script, app of apps, Argo CD managing itself |
-| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`) |
+| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`), T3 cluster bootstrap (Helm + Kubernetes providers, secrets in state) |
 | [CI/CD pipeline](docs/ci-pipeline.md) | the complete `ci.yml`, annotated |
 | [Cheat sheet](docs/cheat-sheet.md) | the commands I use most |
 | [Troubleshooting](docs/troubleshooting.md) | problems I hit, causes and fixes |
@@ -69,13 +69,28 @@ Managed by Terraform since T2 (`terraform/github/`): the "Allow GitHub Actions t
 | `CR_PAT` | Classic PAT | `read:packages` | pulling the private image (Docker + Kubernetes) |
 | `GH_REPO_PAT` | Fine-grained PAT | this repo only, **Contents: Read-only** | Argo CD reading the private repo |
 
-### Rebuild the cluster: one command
+### Rebuild the cluster: two ways (pick one per cluster)
+
+**Option A: the script** (simplest)
 
 ```bash
 bash scripts/bootstrap.sh
 ```
 
 It asks for the two tokens (hidden input), then does everything and prints the Argo CD login at the end. It takes a few minutes, and it's safe to run again. Details: [step 9](docs/part3-platform-as-code.md#step-9--platform-as-code-bootstrap--argo-cd-manages-itself).
+
+**Option B: Terraform** (plan first, state, drift detection)
+
+```bash
+cd terraform/cluster
+rm -f terraform.tfstate terraform.tfstate.backup     # only after a cluster reset: old state = old cluster
+read -s TF_VAR_cr_pat && export TF_VAR_cr_pat
+read -s TF_VAR_gh_repo_pat && export TF_VAR_gh_repo_pat
+terraform init
+terraform apply
+```
+
+Same result; tokens never stored in Terraform state. Details: [step T3](docs/terraform.md#step-t3--cluster-bootstrap-with-terraform).
 
 Afterwards:
 
@@ -94,7 +109,7 @@ read -s CR_PAT
 echo "$CR_PAT" | docker login ghcr.io -u rafaelxfernandes --password-stdin
 ```
 
-> **Order matters**, and the script handles it: `ghcr-secret` must exist before Argo CD syncs the app, otherwise the Pods end in `ImagePullBackOff`.
+> **Order matters**, and both options handle it: `ghcr-secret` must exist before Argo CD syncs the app, otherwise the Pods end in `ImagePullBackOff`.
 
 ### Starting a brand-new project with this setup (checklist)
 
@@ -142,7 +157,7 @@ git tag v1.6.0 && git push origin v1.6.0
 | I want to… | Do this (in a PR, then merge) |
 |---|---|
 | change an Argo CD setting | edit `platform/argocd/values.yaml` |
-| upgrade Argo CD | bump `targetRevision` in `argocd/apps/argocd.yaml` **and** `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh` (check the chart's release notes first) |
+| upgrade Argo CD | bump the chart version in **3 places**: `targetRevision` in `argocd/apps/argocd.yaml`, `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh`, `argocd_chart_version` in `terraform/cluster/variables.tf` (check the chart's release notes first) |
 | add another app | add an Application file to `argocd/apps/` |
 | remove an app | delete its file from `argocd/apps/` |
 | rebuild everything | Reset Kubernetes cluster in Docker Desktop → `bash scripts/bootstrap.sh` |
@@ -183,7 +198,8 @@ DevOps-Lab/
 │   └── bootstrap.sh                # rebuilds the whole platform with one command
 ├── terraform/
 │   ├── t1-basics/                  # T1: learning sandbox (a local file)
-│   └── github/                     # T2: this repo's GitHub settings as code
+│   ├── github/                     # T2: this repo's GitHub settings as code
+│   └── cluster/                    # T3: cluster bootstrap (alternative to scripts/bootstrap.sh)
 ├── kustomize/                      # REFERENCE ONLY (not deployed): Kustomize example
 │   ├── base/                       #   plain YAML shared by every environment
 │   └── overlays/{dev,prod}/        #   per-environment changes

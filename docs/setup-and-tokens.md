@@ -90,6 +90,10 @@ Every credential in this project, what it can do, where it lives, and what to do
   ```
 - Expired → Terraform fails with `401 Bad credentials`: create a new one and export it again.
 
+### Tokens in Terraform (`terraform/cluster/`)
+
+The same `CR_PAT` and `GH_REPO_PAT`, passed as `TF_VAR_cr_pat` / `TF_VAR_gh_repo_pat` (Terraform reads `TF_VAR_<name>` automatically). The variables are `ephemeral` and the Secrets use write-only `data_wo`, so the tokens are **never stored in Terraform state**. To rotate: export the new values, bump `data_wo_revision` in `terraform/cluster/secrets.tf`, `terraform apply`. Details: [docs/terraform.md](terraform.md#step-t3--cluster-bootstrap-with-terraform).
+
 ### When a token expires: rotation
 
 Symptoms: Pods in `ImagePullBackOff` (CR_PAT expired) or Argo CD repo status *Failed* / app *Unknown* (GH_REPO_PAT expired).
