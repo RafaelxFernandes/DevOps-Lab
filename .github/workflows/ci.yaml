@@ -31,10 +31,56 @@ jobs:
       - run: docker build -t devops-lab:ci .
       - run: docker run --rm devops-lab:ci pytest -v
 
-  # ---------- NEW Job 3: publish the image to ghcr.io ----------
-  publish:
+  # ---------- Job: deploy to a throwaway Kubernetes cluster ----------
+  k8s-test:
     runs-on: ubuntu-latest
     needs: docker
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci
+
+      - name: Build image and load it into the cluster
+        run: |
+          docker build -t devops-lab:ci .
+          kind load docker-image devops-lab:ci --name ci
+
+      - name: Create namespace
+        run: kubectl create namespace devops-lab
+
+      - name: Validate manifests against the real API server
+        run: kubectl apply --dry-run=server -f k8s/
+
+      - name: Deploy (swap in the image we just built)
+        run: |
+          sed "s|image: ghcr.io/.*|image: devops-lab:ci|" k8s/deployment.yaml > /tmp/deployment.yaml
+          kubectl apply -f /tmp/deployment.yaml -f k8s/service.yaml
+
+      - name: Wait for the rollout
+        run: kubectl rollout status deployment/devops-lab -n devops-lab --timeout=120s
+
+      - name: Smoke test
+        run: |
+          kubectl port-forward -n devops-lab svc/devops-lab 8080:8080 &
+          sleep 3
+          curl -f http://localhost:8080/health
+          curl -f http://localhost:8080/
+
+      - name: Debug info (only if something failed)
+        if: failure()
+        run: |
+          kubectl get all -n devops-lab
+          kubectl describe pods -n devops-lab
+          kubectl logs -n devops-lab deploy/devops-lab --all-containers --tail=50 || true
+
+  # ---------- Job: publish the image to ghcr.io ----------
+  publish:
+    runs-on: ubuntu-latest
+    needs: [docker, k8s-test]
     if: github.event_name != 'pull_request'   # never publish from PRs
 
     permissions:
