@@ -22,7 +22,7 @@ spec:
             - containerPort: 5000
           readinessProbe:              # "is it ready to receive traffic?"
             httpGet:
-              path: /health
+              path: /healthz
               port: 5000
             initialDelaySeconds: 3
             periodSeconds: 5
