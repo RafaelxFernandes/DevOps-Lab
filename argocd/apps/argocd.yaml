@@ -1,0 +1,35 @@
+# Argo CD managing ITSELF from git.
+# bootstrap.sh installs Argo CD once with Helm; this Application then takes
+# ownership. To upgrade Argo CD: change targetRevision below (and
+# ARGOCD_CHART_VERSION in scripts/bootstrap.sh) in a PR, merge.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  project: default
+
+  # Two sources: the official chart + our values file from this repo
+  sources:
+    - repoURL: https://argoproj.github.io/argo-helm     # official Argo Helm repo
+      chart: argo-cd
+      targetRevision: 10.7.1                            # chart version (pinned)
+      helm:
+        releaseName: argocd                             # same name bootstrap used
+        valueFiles:
+          - $values/platform/argocd/values.yaml         # "$values" = the source below
+    - repoURL: https://github.com/rafaelxfernandes/DevOps-Lab.git
+      targetRevision: main
+      ref: values                                       # referenced above as $values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: false        # SAFETY: never let a mistake in git delete Argo CD itself
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true   # Argo CD's CRDs are too big for client-side apply

@@ -7,6 +7,7 @@ The app is deliberately tiny (a Flask app with two endpoints) so the focus stays
 
 - **Part 1 (steps 1–5 + bonus):** everything done **by hand** to understand each piece.
 - **Part 2 (steps 6–8):** replacing the manual parts with the tools companies use in real life.
+- **Part 3 (step 9):** the "platform team" view: the whole platform rebuilt from git with **one command**, and Argo CD managing itself.
 
 ```
 developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
@@ -37,11 +38,12 @@ developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
 11. [Step 6 – Helm](#11-step-6--helm)
 12. [Step 7 – Automated version-bump PR](#12-step-7--automated-version-bump-pr)
 13. [Step 8 – GitOps with Argo CD](#13-step-8--gitops-with-argo-cd)
-14. [The complete `ci.yml`, annotated](#14-the-complete-ciyml-annotated)
-15. [How to release / roll back (day-to-day)](#15-how-to-release--roll-back-day-to-day)
-16. [Command cheat sheet](#16-command-cheat-sheet)
-17. [Problems I hit and what they taught me](#17-problems-i-hit-and-what-they-taught-me)
-18. [Next things to learn](#18-next-things-to-learn)
+14. [Step 9 – Platform as code (bootstrap + Argo CD manages itself)](#14-step-9--platform-as-code-bootstrap--argo-cd-manages-itself)
+15. [The complete `ci.yml`, annotated](#15-the-complete-ciyml-annotated)
+16. [How to release / roll back / change the platform (day-to-day)](#16-how-to-release--roll-back--change-the-platform-day-to-day)
+17. [Command cheat sheet](#17-command-cheat-sheet)
+18. [Problems I hit and what they taught me](#18-problems-i-hit-and-what-they-taught-me)
+19. [Next things to learn](#19-next-things-to-learn)
 
 ---
 
@@ -55,6 +57,7 @@ DevOps-Lab/
 ├── Dockerfile                      # How to build the container image
 ├── .dockerignore                   # Files Docker must NOT copy into the image
 ├── .gitignore                      # Files git must NOT track
+├── .gitattributes                  # Forces LF line endings for *.sh (Windows safety)
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                  # The whole CI/CD pipeline
@@ -65,8 +68,16 @@ DevOps-Lab/
 │       └── templates/
 │           ├── deployment.yaml
 │           └── service.yaml
-└── argocd/
-    └── devops-lab-app.yaml         # tells Argo CD what to deploy and where
+├── argocd/
+│   ├── root-app.yaml               # "app of apps": deploys everything in argocd/apps/
+│   └── apps/
+│       ├── devops-lab.yaml         # the app (Helm chart above)
+│       └── argocd.yaml             # Argo CD managing ITSELF
+├── platform/
+│   └── argocd/
+│       └── values.yaml             # Argo CD's own configuration
+└── scripts/
+    └── bootstrap.sh                # rebuilds the whole platform with one command
 ```
 
 > The annotated file copies in this README explain each line. The real files in the repo are always the source of truth (e.g. the greeting text and the current version change over time).
@@ -123,53 +134,30 @@ Use this when the cluster was reset (Docker Desktop → Reset Kubernetes), on a 
 | `CR_PAT` | Classic PAT | `read:packages` | pulling the private image (Docker + Kubernetes) |
 | `GH_REPO_PAT` | Fine-grained PAT | this repo only, **Contents: Read-only** | Argo CD reading the private repo |
 
-### 3.4 Rebuild the cluster (copy-paste in order)
+### 3.4 Rebuild the cluster: one command
 
 ```bash
-# --- 1. Docker can pull the private image (optional, only for local docker pull) ---
-read -s CR_PAT                                   # paste classic token, Enter
-echo "$CR_PAT" | docker login ghcr.io -u rafaelxfernandes --password-stdin
-
-# --- 2. Namespace + pull secret for the app ---
-kubectl create namespace devops-lab
-kubectl create secret docker-registry ghcr-secret \
-  --namespace devops-lab \
-  --docker-server=ghcr.io \
-  --docker-username=rafaelxfernandes \
-  --docker-password="$CR_PAT"
-
-# --- 3. Install Argo CD ---
-kubectl create namespace argocd
-kubectl apply -n argocd --server-side --force-conflicts \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl get pods -n argocd -w                    # wait until all Running, then Ctrl+C
-
-# --- 4. Argo CD can read the private repo ---
-read -s GH_REPO_PAT                              # paste fine-grained token, Enter
-kubectl create secret generic repo-devops-lab -n argocd \
-  --from-literal=type=git \
-  --from-literal=url=https://github.com/rafaelxfernandes/DevOps-Lab.git \
-  --from-literal=username=rafaelxfernandes \
-  --from-literal=password="$GH_REPO_PAT"
-kubectl label secret repo-devops-lab -n argocd argocd.argoproj.io/secret-type=repository
-
-# --- 5. Hand the app to Argo CD (the ONLY manual apply) ---
-kubectl apply -f argocd/devops-lab-app.yaml
+bash scripts/bootstrap.sh
 ```
 
-Then:
+It asks for the two tokens (hidden input), then does everything and prints the Argo CD login at the end. It takes a few minutes, and it's safe to run again. Details: [step 9](#14-step-9--platform-as-code-bootstrap--argo-cd-manages-itself).
+
+Afterwards:
 
 ```bash
 # Argo CD UI (separate Git Bash window, keep open)
 kubectl port-forward svc/argocd-server -n argocd 8443:443
-# → https://localhost:8443  (accept self-signed cert), user: admin, password:
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+# → https://localhost:8443  (accept self-signed cert), user admin, password printed by the script
 
 # The app
 curl http://localhost:8080/health
+
+# Optional, only to `docker pull` the private image on the PC:
+read -s CR_PAT
+echo "$CR_PAT" | docker login ghcr.io -u rafaelxfernandes --password-stdin
 ```
 
-> **Order matters:** `ghcr-secret` must exist before Argo CD syncs, otherwise the Pods end in `ImagePullBackOff` (fix: create the secret; Argo CD/Kubernetes retry automatically).
+> **Order matters**, and the script handles it: `ghcr-secret` must exist before Argo CD syncs the app, otherwise the Pods end in `ImagePullBackOff`.
 
 ### 3.5 Starting a brand-new project with this setup (checklist)
 
@@ -180,15 +168,12 @@ curl http://localhost:8080/health
 5. Helm chart in `charts/<app>/` ([step 6](#11-step-6--helm))
 6. `k8s-test` job (kind + `helm upgrade --install --wait`) ([bonus](#10-bonus--testing-kubernetes-in-ci-with-kind))
 7. Repo setting "Allow GitHub Actions to create PRs" + `bump-version` job ([step 7](#12-step-7--automated-version-bump-pr))
-8. Argo CD `Application` manifest + bootstrap ([step 8](#13-step-8--gitops-with-argo-cd))
+8. Argo CD `Application` manifest ([step 8](#13-step-8--gitops-with-argo-cd))
+9. `argocd/root-app.yaml` + `argocd/apps/` + `scripts/bootstrap.sh` ([step 9](#14-step-9--platform-as-code-bootstrap--argo-cd-manages-itself))
 
 ### 3.6 Tear everything down
 
-```bash
-kubectl delete -f argocd/devops-lab-app.yaml   # with prune, Argo CD removes the app's resources
-kubectl delete namespace devops-lab
-kubectl delete namespace argocd
-```
+Easiest and cleanest: Docker Desktop → **Settings → Kubernetes → Reset Kubernetes cluster**. Everything in the cluster is deleted; nothing in git is affected. Then `bash scripts/bootstrap.sh` rebuilds it.
 
 ---
 
@@ -410,7 +395,7 @@ YAML: **indentation is everything**, spaces only.
 
 Practised: watching runs in the **Actions** tab, breaking a test on purpose (red ❌, dependent jobs skipped), CI checks on pull requests.
 
-Full annotated workflow: [section 14](#14-the-complete-ciyml-annotated).
+Full annotated workflow: [section 15](#15-the-complete-ciyml-annotated).
 
 ---
 
@@ -686,7 +671,7 @@ git tag v1.4.0 ─► test ─► docker ─► k8s-test ─► publish 1.4.0 �
                                      (values.yaml: tag 1.3.0 → 1.4.0, Chart.yaml: appVersion)
 ```
 
-Key pieces (full job in [section 14](#14-the-complete-ciyml-annotated)):
+Key pieces (full job in [section 15](#15-the-complete-ciyml-annotated)):
 
 | Piece | Meaning |
 |---|---|
@@ -714,7 +699,9 @@ Argo CD runs **inside the cluster** and loops forever:
 **Pull model:** the cluster pulls from git; CI never needs cluster credentials (security win).
 Argo CD uses Helm only as a **template engine** → `helm list` is empty; history lives in git + the Argo CD UI.
 
-### Install + access
+### Install + access (how it was done by hand in step 8)
+
+> Since step 9, `scripts/bootstrap.sh` installs Argo CD from its **Helm chart** instead. The manual install below is kept to show what happens underneath.
 
 ```bash
 kubectl create namespace argocd
@@ -729,7 +716,7 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 
 Repo credentials: [section 4.3](#43-gh_repo_pat-fine-grained-pat-contents-read-only).
 
-### `argocd/devops-lab-app.yaml`
+### `argocd/apps/devops-lab.yaml` (was `argocd/devops-lab-app.yaml` until step 9)
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -757,7 +744,7 @@ spec:
       selfHeal: true              # undo manual changes in the cluster
 ```
 
-Bootstrap once: `kubectl apply -f argocd/devops-lab-app.yaml`. Before that, the Helm-CLI release was removed with `helm uninstall` so Argo CD owns everything cleanly.
+In step 8 it was applied once by hand with `kubectl apply`, after removing the Helm-CLI release (`helm uninstall`) so Argo CD owned everything cleanly. Since step 9, the root app deploys it automatically.
 
 ### What I verified
 
@@ -772,7 +759,165 @@ Argo CD **polls** git every few minutes. Companies configure a GitHub **webhook*
 
 ---
 
-## 14. The complete `ci.yml`, annotated
+## 14. Step 9 – Platform as code (bootstrap + Argo CD manages itself)
+
+The goal: what a **platform team** does. The whole cluster setup lives in git and is rebuilt with one command; after that, nobody touches the cluster directly. Not even to change Argo CD.
+
+### The idea: bootstrap once, then git takes over
+
+Some things **can't** come from git, because Argo CD needs them before it can read git:
+- the **Secrets** (tokens must never be in git)
+- **Argo CD itself** (something has to install the thing that reads git)
+
+So the script does only those, then hands over:
+
+```
+bash scripts/bootstrap.sh
+  │
+  ├─ 1. checks tools + refuses to run on any cluster except docker-desktop
+  ├─ 2. asks for CR_PAT + GH_REPO_PAT (hidden, never written to disk)
+  ├─ 3. namespaces: argocd, devops-lab
+  ├─ 4. secrets:    ghcr-secret, repo-devops-lab
+  ├─ 5. helm install Argo CD (official chart, pinned version, our values file)
+  ├─ 6. kubectl apply argocd/root-app.yaml     ← the LAST manual action
+  └─ 7. waits until devops-lab is Healthy, prints the login
+                │
+                ▼
+      root app ──► deploys every file in argocd/apps/
+                     ├─ devops-lab.yaml  → the app (our Helm chart)
+                     └─ argocd.yaml      → Argo CD itself (takes over from the Helm install)
+```
+
+### Pattern 1: "app of apps" (`argocd/root-app.yaml`)
+
+One Application whose job is to deploy **other Applications**. It points at the folder `argocd/apps/`, so:
+
+- **new app** = add a file to `argocd/apps/` + merge
+- **remove an app** = delete its file + merge (`prune: true`)
+
+The bootstrap applies only this one file. Everything else follows from git.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rafaelxfernandes/DevOps-Lab.git
+    targetRevision: main
+    path: argocd/apps            # a plain folder of Application manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd            # Applications live in Argo CD's namespace
+  syncPolicy:
+    automated:
+      prune: true                # file removed from argocd/apps → Application removed
+      selfHeal: true
+```
+
+`root-app.yaml` sits **outside** `argocd/apps/` on purpose, so the root app doesn't manage itself.
+
+### Pattern 2: Argo CD manages itself (`argocd/apps/argocd.yaml`)
+
+The bootstrap installs Argo CD with Helm (release name `argocd`). Then this Application renders the **same chart, same version, same release name, same values**, so it matches what's running and takes ownership:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  project: default
+  sources:                                              # TWO sources:
+    - repoURL: https://argoproj.github.io/argo-helm     # 1. official chart
+      chart: argo-cd
+      targetRevision: 10.7.1                            #    pinned chart version
+      helm:
+        releaseName: argocd
+        valueFiles:
+          - $values/platform/argocd/values.yaml         #    values from source 2
+    - repoURL: https://github.com/rafaelxfernandes/DevOps-Lab.git
+      targetRevision: main
+      ref: values                                       # 2. our repo, named "$values"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: false        # SAFETY: a mistake in git must never delete Argo CD itself
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true   # Argo CD's CRDs are too big for client-side apply
+```
+
+| Piece | Meaning |
+|---|---|
+| `sources:` (plural) | **Multi-source** Application: chart from one repo, values from another |
+| `ref: values` / `$values/...` | name a source, then use its files from the other source |
+| `prune: false` | deliberate exception: for the tool that runs everything, refuse automatic deletion |
+| `ServerSideApply=true` | same reason as `--server-side` in the manual install |
+
+**Version pinning:** chart `10.7.1` appears in **two places**, `argocd/apps/argocd.yaml` and `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh`. Keep them equal, or a fresh bootstrap installs a different version than git describes (Argo CD would then upgrade or downgrade itself right after).
+
+### `platform/argocd/values.yaml`: Argo CD's own config, in git
+
+```yaml
+dex:
+  enabled: false                  # no SSO in the lab: log in with the admin account
+notifications:
+  enabled: false                  # no Slack/email notifications in the lab
+configs:
+  cm:
+    timeout.reconciliation: 60s   # check git every 60s (+ up to 60s jitter), default 120s
+```
+
+Anything under `configs.cm` goes into Argo CD's main ConfigMap (`argocd-cm`). All options are in the chart's [values.yaml](https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd).
+
+### `scripts/bootstrap.sh`: notable techniques
+
+| Technique | Why |
+|---|---|
+| `set -euo pipefail` | stop at the first error, catch undefined variables, fail on errors inside pipes |
+| context check (`docker-desktop` only) | a bootstrap script must never run against the wrong cluster by accident |
+| `read -rsp` | hidden token input; tokens can also come from env vars (`CR_PAT=... bash scripts/bootstrap.sh`) |
+| `kubectl create ... --dry-run=client -o yaml \| kubectl apply -f -` | **create-or-update**: running the script twice doesn't fail on "already exists" |
+| `kubectl label ... --overwrite` | idempotent labelling |
+| `helm upgrade --install --wait` | install-or-upgrade, and wait until Argo CD is ready |
+| `kubectl wait --for=jsonpath='{.status.health.status}'=Healthy` | wait for a specific field value on any resource |
+| `cd "$(dirname "$0")/.."` | works no matter which folder you run it from |
+
+**Idempotent** = running it again changes nothing if everything is already right. That's what makes it safe as a "fix whatever is broken" button.
+
+### `.gitattributes`: line endings
+
+```
+*.sh text eol=lf
+```
+
+Windows editors save files with **CRLF** line endings; bash reads the extra `\r` as part of the commands and fails (`$'\r': command not found`). This makes git always store and check out `.sh` files with **LF**. In VS Code, also check the bottom-right corner shows **LF** for the script.
+
+### Migration from the step 8 setup
+
+1. Added the new files, `git rm argocd/devops-lab-app.yaml` (replaced by `argocd/apps/devops-lab.yaml`), committed and pushed. **The root app reads from git, so everything must be pushed before bootstrapping.**
+2. Docker Desktop → **Reset Kubernetes cluster** (the real "from scratch" test).
+3. `bash scripts/bootstrap.sh`
+
+### Tests to prove it works
+
+| Test | Expected result |
+|---|---|
+| Fresh cluster → `bash scripts/bootstrap.sh` | App Healthy; three apps in the UI: `root`, `argocd`, `devops-lab` |
+| Run the script a second time | No errors, nothing changes (idempotent) |
+| Change `platform/argocd/values.yaml` (e.g. `timeout.reconciliation: 30s`) + merge | The `argocd` app syncs; `kubectl get cm argocd-cm -n argocd -o yaml` shows the new value |
+| `kubectl delete application devops-lab -n argocd` | The root app recreates it |
+
+---
+
+## 15. The complete `ci.yml`, annotated
 
 ```yaml
 name: CI
@@ -932,7 +1077,7 @@ Pipeline graph: **test (×2) → docker → k8s-test → publish → bump-versio
 
 ---
 
-## 15. How to release / roll back (day-to-day)
+## 16. How to release / roll back / change the platform (day-to-day)
 
 ### Release
 
@@ -955,9 +1100,20 @@ git tag v1.6.0 && git push origin v1.6.0
 
 > Don't use `kubectl rollout undo` or `helm rollback` anymore: Argo CD's selfHeal undoes them because git still says the newer version. Git is the only lever.
 
+### Change the platform
+
+| I want to… | Do this (in a PR, then merge) |
+|---|---|
+| change an Argo CD setting | edit `platform/argocd/values.yaml` |
+| upgrade Argo CD | bump `targetRevision` in `argocd/apps/argocd.yaml` **and** `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh` (check the chart's release notes first) |
+| add another app | add an Application file to `argocd/apps/` |
+| remove an app | delete its file from `argocd/apps/` |
+| rebuild everything | Reset Kubernetes cluster in Docker Desktop → `bash scripts/bootstrap.sh` |
+| fix a broken/half-installed setup | `bash scripts/bootstrap.sh` again (idempotent) |
+
 ---
 
-## 16. Command cheat sheet
+## 17. Command cheat sheet
 
 ### Git
 ```bash
@@ -986,6 +1142,13 @@ kubectl logs -n devops-lab deploy/devops-lab
 kubectl port-forward -n devops-lab svc/devops-lab 8080:8080
 kubectl port-forward svc/argocd-server -n argocd 8443:443
 kubectl get applications -n argocd            # Argo CD apps + sync/health status
+kubectl get cm argocd-cm -n argocd -o yaml    # Argo CD's live config
+```
+
+### Platform
+```bash
+bash scripts/bootstrap.sh                                  # rebuild / repair everything
+CR_PAT=... GH_REPO_PAT=... bash scripts/bootstrap.sh       # same, tokens from env vars
 ```
 
 ### Helm
@@ -997,7 +1160,7 @@ helm template devops-lab charts/devops-lab --set image.tag=9.9.9   # preview a c
 
 ---
 
-## 17. Problems I hit and what they taught me
+## 18. Problems I hit and what they taught me
 
 1. **`Kubeconfig not found` popup in VS Code:** the Kubernetes extension activates on YAML files. Harmless; gone once Kubernetes is enabled.
 2. **`docker login` fails in Git Bash:** not a real TTY. Use `--password-stdin` or log in once from PowerShell.
@@ -1012,13 +1175,15 @@ helm template devops-lab charts/devops-lab --set image.tag=9.9.9   # preview a c
 11. **Helm refuses to adopt resources created by `kubectl`:** delete them first (`kubectl delete -f k8s/`) or migrate carefully.
 12. **`helm list` empty after Argo CD took over:** expected. Argo CD renders the chart itself; it doesn't create Helm releases.
 13. **Bump PR has no CI checks:** `GITHUB_TOKEN` events don't trigger workflows (anti-loop rule). See [section 4.1](#41-github_token-automatic-used-by-ci).
+14. **`$'\r': command not found` when running a script:** the file has Windows (CRLF) line endings. Fixed permanently by `.gitattributes` (`*.sh text eol=lf`); in VS Code, set the line ending to **LF** (bottom-right corner).
+15. **`helm list -n argocd` still shows the bootstrap release:** expected. Helm installed Argo CD once; after that, the `argocd` Application owns it. Upgrades go through git, never `helm upgrade`.
+16. **Bootstrap applied the root app but apps are missing:** the root app reads **git**, not my PC. Unpushed files don't exist for Argo CD. Push first.
 
 ---
 
-## 18. Next things to learn
+## 19. Next things to learn
 
 - **Argo Rollouts**: canary releases (send 10% of traffic to the new version, auto-rollback on errors).
-- **Argo CD managing itself / "app of apps"**: install Argo CD via Helm and let it manage its own config and all apps from git.
 - **Sealed Secrets / External Secrets**: put secrets in git safely (encrypted) or pull them from a vault.
 - **Multiple environments**: `values-dev.yaml` / `values-prod.yaml`, promotion between environments.
 - **GitHub App token** for the bump job so bot PRs get CI checks.

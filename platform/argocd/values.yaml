@@ -1,0 +1,14 @@
+# Configuration of Argo CD itself (values for the official argo-cd Helm chart).
+# Change a value here + merge → Argo CD reconfigures itself (argocd/apps/argocd.yaml).
+# All options: https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd
+
+dex:
+  enabled: false                  # no SSO in the lab: log in with the admin account
+
+notifications:
+  enabled: false                  # no Slack/email notifications in the lab
+
+configs:
+  cm:
+    timeout.reconciliation: 60s   # check git every 60s (+ up to 60s jitter) instead of
+                                  # the default 120s (+ jitter): faster demos

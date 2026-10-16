@@ -1,0 +1,24 @@
+# The app itself (moved here from argocd/devops-lab-app.yaml in step 9).
+apiVersion: argoproj.io/v1alpha1
+kind: Application                 # Argo CD object: "keep this deployed"
+metadata:
+  name: devops-lab
+  namespace: argocd
+spec:
+  project: default
+
+  source:                         # WHAT (desired state)
+    repoURL: https://github.com/rafaelxfernandes/DevOps-Lab.git
+    targetRevision: main
+    path: charts/devops-lab       # our Helm chart
+    helm:
+      releaseName: devops-lab     # keeps resource names "devops-lab"
+
+  destination:                    # WHERE
+    server: https://kubernetes.default.svc
+    namespace: devops-lab
+
+  syncPolicy:
+    automated:
+      prune: true                 # delete resources removed from git
+      selfHeal: true              # undo manual changes in the cluster
