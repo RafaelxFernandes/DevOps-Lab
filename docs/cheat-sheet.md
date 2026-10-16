@@ -56,3 +56,16 @@ kubectl apply -k kustomize/overlays/dev        # render + apply
 kubectl diff -k kustomize/overlays/prod        # what would change
 diff <(kubectl kustomize kustomize/overlays/dev) <(kubectl kustomize kustomize/overlays/prod)
 ```
+
+### Terraform
+```bash
+read -s GITHUB_TOKEN && export GITHUB_TOKEN   # token for the GitHub provider (per terminal)
+terraform init                                # download providers (once per folder / after version changes)
+terraform fmt && terraform validate           # format + check
+terraform plan                                # what would change: READ IT
+terraform apply                               # do it (asks "yes")
+terraform plan -destroy                       # preview a destroy (safe)
+terraform state list                          # what Terraform manages
+terraform show                                # details from state
+terraform apply -var 'enable_main_protection=false'   # override a variable once
+```

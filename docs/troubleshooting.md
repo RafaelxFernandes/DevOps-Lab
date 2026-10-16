@@ -22,3 +22,7 @@ Real errors from building this project, with the cause and the fix.
 14. **`$'\r': command not found` when running a script:** the file has Windows (CRLF) line endings. Fixed permanently by `.gitattributes` (`*.sh text eol=lf`); in VS Code, set the line ending to **LF** (bottom-right corner).
 15. **`helm list -n argocd` still shows the bootstrap release:** expected. Helm installed Argo CD once; after that, the `argocd` Application owns it. Upgrades go through git, never `helm upgrade`.
 16. **Bootstrap applied the root app but apps are missing:** the root app reads **git**, not my PC. Unpushed files don't exist for Argo CD. Push first.
+17. **Terraform import turned on a setting I didn't mean to change (`has_wiki = false -> true`):** my code didn't match the existing repo and I applied without checking every `~` line. Rule: after an import, the plan must show **only intended changes**.
+18. **`403 Upgrade to GitHub Pro or make this repository public` when creating a ruleset:** the account is on **GitHub Free** (check Settings → Billing: "Current plan"; Copilot Pro/Free is a separate product). Rulesets on private repos need a paid plan → made the repo public through Terraform.
+19. **Apply failed halfway:** Terraform isn't all-or-nothing. What succeeded is saved in state; the next plan shows only what's left. Always read the apply output to the end.
+20. **`Instance cannot be destroyed`:** `lifecycle { prevent_destroy = true }` working as intended on the repo. Not an error to fix.

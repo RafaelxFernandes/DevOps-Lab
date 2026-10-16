@@ -80,6 +80,16 @@ Every credential in this project, what it can do, where it lives, and what to do
 - Kubernetes stores Secret values **base64-encoded** (encoding, *not* encryption), hence `base64 -d`.
 - Real setups: change it and delete that secret, or use SSO (GitHub/Google/Okta login).
 
+### `GITHUB_TOKEN` env var for Terraform (fine-grained PAT, Administration read/write)
+
+- **Not** the automatic CI token: same variable name, different token. The GitHub Terraform provider reads `GITHUB_TOKEN` from the environment.
+- **Create:** Fine-grained tokens → only `DevOps-Lab` → **Administration: Read and write**, **Contents: Read-only** → short expiration.
+- **Can change the repo's settings**, so it's the most powerful token here. Only in the terminal, never in a file:
+  ```bash
+  read -s GITHUB_TOKEN && export GITHUB_TOKEN    # once per terminal
+  ```
+- Expired → Terraform fails with `401 Bad credentials`: create a new one and export it again.
+
 ### When a token expires: rotation
 
 Symptoms: Pods in `ImagePullBackOff` (CR_PAT expired) or Argo CD repo status *Failed* / app *Unknown* (GH_REPO_PAT expired).

@@ -1,13 +1,14 @@
 # DevOps Lab
 
 A personal project to learn, hands-on, how a real CI/CD + GitOps pipeline is built:
-**GitHub Actions** → **Docker** → **Kubernetes** → **Helm** → **Argo CD**.
+**GitHub Actions** → **Docker** → **Kubernetes** → **Helm** → **Argo CD** → **Terraform**.
 
 The app is deliberately tiny (a Flask app with two endpoints) so the focus stays on everything around it.
 
 - **Part 1 (steps 1–5 + bonus):** everything done **by hand** to understand each piece.
 - **Part 2 (steps 6–8):** replacing the manual parts with the tools companies use in real life.
 - **Part 3 (step 9):** the "platform team" view: the whole platform rebuilt from git with **one command**, and Argo CD managing itself.
+- **Part 4 (Terraform, T1–T5):** infrastructure as code, starting with the GitHub repo's own settings.
 
 ```
 developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
@@ -31,6 +32,7 @@ developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
 | [Part 1: by hand](docs/part1-by-hand.md) | steps 1–5 + bonus: app, Docker, GitHub Actions, ghcr.io, Kubernetes, kind in CI |
 | [Part 2: real-world tools](docs/part2-real-world-tools.md) | steps 6–8: Helm, automated version-bump PR, Argo CD |
 | [Part 3: platform as code](docs/part3-platform-as-code.md) | step 9: bootstrap script, app of apps, Argo CD managing itself |
+| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`) |
 | [CI/CD pipeline](docs/ci-pipeline.md) | the complete `ci.yml`, annotated |
 | [Cheat sheet](docs/cheat-sheet.md) | the commands I use most |
 | [Troubleshooting](docs/troubleshooting.md) | problems I hit, causes and fixes |
@@ -56,9 +58,9 @@ Use this when the cluster was reset (Docker Desktop → Reset Kubernetes), on a 
    cd DevOps-Lab
    ```
 
-### GitHub one-time settings (already done for this repo; needed for a new repo)
+### GitHub one-time settings
 
-- **Settings → Actions → General → Workflow permissions** → tick **"Allow GitHub Actions to create and approve pull requests"** (needed by the `bump-version` job).
+Managed by Terraform since T2 (`terraform/github/`): the "Allow GitHub Actions to create and approve pull requests" setting (needed by the `bump-version` job), auto-delete of merged branches, and the `protect-main` ruleset. For a brand-new repo, run `terraform apply` there (see [Part 4](docs/terraform.md#step-t2--the-github-repo-as-code)) instead of clicking.
 
 ### Tokens you need (see [Tokens, secrets and permissions](docs/setup-and-tokens.md#tokens-secrets-and-permissions) for details)
 
@@ -179,6 +181,9 @@ DevOps-Lab/
 │       └── values.yaml             # Argo CD's own configuration
 ├── scripts/
 │   └── bootstrap.sh                # rebuilds the whole platform with one command
+├── terraform/
+│   ├── t1-basics/                  # T1: learning sandbox (a local file)
+│   └── github/                     # T2: this repo's GitHub settings as code
 ├── kustomize/                      # REFERENCE ONLY (not deployed): Kustomize example
 │   ├── base/                       #   plain YAML shared by every environment
 │   └── overlays/{dev,prod}/        #   per-environment changes
