@@ -3,4 +3,4 @@ name: devops-lab
 description: My DevOps lab Flask app
 type: application
 version: 0.1.0 # version of the CHART (the packaging). Bump when templates change.
-appVersion: "1.4.0" # version of the APP inside. Informational.
+appVersion: "1.5.0" # version of the APP inside. Informational.
