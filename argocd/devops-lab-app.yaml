@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application                 # an Argo CD object: "keep this deployed"
+metadata:
+  name: devops-lab
+  namespace: argocd               # Applications live in Argo CD's namespace
+spec:
+  project: default
+
+  source:                         # WHAT to deploy (desired state)
+    repoURL: https://github.com/rafaelxfernandes/DevOps-Lab.git
+    targetRevision: main          # follow the main branch
+    path: charts/devops-lab       # the Helm chart inside the repo
+    helm:
+      releaseName: devops-lab     # keeps resource names as "devops-lab"
+
+  destination:                    # WHERE to deploy it
+    server: https://kubernetes.default.svc   # "the cluster Argo CD runs in"
+    namespace: devops-lab
+
+  syncPolicy:
+    automated:                    # sync automatically when git changes
+      prune: true                 # delete resources that were removed from git
+      selfHeal: true              # undo manual changes made in the cluster
