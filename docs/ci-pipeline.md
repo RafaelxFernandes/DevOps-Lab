@@ -143,6 +143,8 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           yq -i '.image.tag = strenv(VERSION)' charts/devops-lab/values.yaml
           yq -i '.appVersion = strenv(VERSION)' charts/devops-lab/Chart.yaml
+          # dev follows every release too (added with Terraform T5); prod is promoted by hand:
+          yq -i '(.images[] | select(.name == "ghcr.io/rafaelxfernandes/devops-lab")).newTag = strenv(VERSION)' kustomize/overlays/dev/kustomization.yaml
           git diff
 
       - name: Open pull request

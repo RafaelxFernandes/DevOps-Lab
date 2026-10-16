@@ -15,6 +15,7 @@ Terraform describes infrastructure in files and makes reality match them: it cre
 - [Step T2 – The GitHub repo as code](#step-t2--the-github-repo-as-code)
 - [Step T3 – Cluster bootstrap with Terraform](#step-t3--cluster-bootstrap-with-terraform)
 - [Step T4 – Terraform in CI](#step-t4--terraform-in-ci)
+- [Step T5 – Modules and environments](#step-t5--modules-and-environments)
 - [Concepts reference](#concepts-reference)
 - [Terraform vs OpenTofu](#terraform-vs-opentofu)
 
@@ -135,7 +136,7 @@ Same idea as Argo CD (desired state in git → reality), one layer lower. One di
 | T2 | GitHub provider: repo settings as code, `import`, safety nets, `count` | ✅ |
 | T3 | Helm + Kubernetes providers: cluster bootstrap with Terraform, secrets in state | ✅ |
 | T4 | Terraform in CI: `fmt` / `validate` / TFLint on PRs (part A); remote state + `plan` in CI (part B) | ✅ part A · 📘 part B documented |
-| T5 | modules + per-environment variables | next |
+| T5 | modules + environments (dev / prod) | ✅ |
 
 ---
 
@@ -1071,6 +1072,384 @@ A GitHub **environment** with required reviewers pauses the job until someone ap
 
 ---
 
+## Step T5 – Modules and environments
+
+A Terraform **module** that defines "one environment of the app", called once per environment. Result: two extra, real environments next to the main app.
+
+| Environment | URL | Deployed from | Replicas | Version (at creation) |
+|---|---|---|---|---|
+| main app (unchanged) | `localhost:8080` | Helm chart `charts/devops-lab` | 2 | follows releases (bump PR) |
+| **dev** | `localhost:8081` | Kustomize overlay `kustomize/overlays/dev` | 1 | 1.5.0 |
+| **prod** | `localhost:8082` | Kustomize overlay `kustomize/overlays/prod` | 3 | 1.4.0 |
+
+### The structure
+
+```
+terraform/environments/              ← ROOT: the list of environments (own state)
+        │  calls once per environment (for_each)
+        ▼
+terraform/modules/app-environment/   ← MODULE: what ONE environment is
+        ├─ namespace       devops-lab-<env>
+        ├─ pull secret     ghcr-secret  (write-only, as in T3)
+        └─ Argo CD Application → deploys kustomize/overlays/<env>
+```
+
+**Layered roots:** `terraform/environments` needs Argo CD to exist (its `Application` CRD), so it's applied **after** `terraform/cluster` (or `bootstrap.sh`). Separate folders = separate states = separate blast radius.
+
+### What a module is
+
+| Programming | Terraform |
+|---|---|
+| function definition | a module folder (`modules/app-environment/`) |
+| parameters | its `variable` blocks |
+| return values | its `output` blocks |
+| function call | `module "env" { source = "..." ... }` |
+| calling it in a loop | `for_each` on the module |
+
+Every folder written before was already a module: the **root module**. Companies write "a standard environment / database / repo" **once**, with their conventions built in, and reuse it everywhere.
+
+### Module: `terraform/modules/app-environment/`
+
+**`versions.tf`**
+```hcl
+# A module declares WHICH providers it needs, but never configures them:
+# the root configuration that calls the module passes its provider configuration in.
+terraform {
+  required_version = ">= 1.16"
+
+  required_providers {
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 3.3"
+    }
+  }
+}
+```
+
+**`variables.tf`** (the module's inputs)
+```hcl
+variable "name" {
+  description = "Environment name, e.g. dev or prod"
+  type        = string
+
+  validation {                                   # reject bad input at plan time
+    condition     = can(regex("^[a-z0-9-]+$", var.name))
+    error_message = "name must be lowercase letters, digits or dashes (it becomes part of Kubernetes names)."
+  }
+}
+
+variable "kustomize_path" {
+  description = "Path in the repo of the Kustomize overlay to deploy"
+  type        = string
+}
+
+variable "repo_url" {
+  description = "Git repository Argo CD reads"
+  type        = string
+}
+
+variable "target_revision" {
+  description = "Git branch/tag Argo CD follows"
+  type        = string
+  default     = "main"
+}
+
+variable "argocd_namespace" {
+  description = "Namespace where Argo CD runs (Applications live there)"
+  type        = string
+  default     = "argocd"
+}
+
+variable "github_user" {
+  description = "Username for the ghcr.io pull secret"
+  type        = string
+}
+
+variable "cr_pat" {
+  description = "Classic PAT with read:packages, for the ghcr.io pull secret"
+  type        = string
+  sensitive   = true
+  ephemeral   = true            # never stored in state (see T3)
+}
+
+variable "cr_pat_revision" {
+  description = "Bump to push a new token value into the pull secret"
+  type        = number
+  default     = 1
+}
+```
+
+**`main.tf`**
+```hcl
+locals {
+  namespace = "devops-lab-${var.name}"   # e.g. devops-lab-dev
+}
+
+# 1. The namespace (Terraform owns it, so the Kustomize overlays don't create it)
+resource "kubernetes_namespace_v1" "this" {
+  metadata {
+    name = local.namespace
+    labels = {
+      environment = var.name
+    }
+  }
+}
+
+# 2. The image pull secret: created with write-only data, never stored in state
+resource "kubernetes_secret_v1" "ghcr" {
+  metadata {
+    name      = "ghcr-secret"
+    namespace = kubernetes_namespace_v1.this.metadata[0].name
+  }
+
+  type = "kubernetes.io/dockerconfigjson"
+
+  data_wo_revision = var.cr_pat_revision
+  data_wo = {
+    ".dockerconfigjson" = jsonencode({
+      auths = {
+        "ghcr.io" = {
+          username = var.github_user
+          password = var.cr_pat
+          auth     = base64encode("${var.github_user}:${var.cr_pat}")
+        }
+      }
+    })
+  }
+}
+
+# 3. The Argo CD Application that deploys the Kustomize overlay into the namespace.
+#    kubernetes_manifest = any Kubernetes object written in HCL. It needs the CRD to exist
+#    at plan time: fine here, because Argo CD is already installed.
+resource "kubernetes_manifest" "application" {
+  manifest = {
+    apiVersion = "argoproj.io/v1alpha1"
+    kind       = "Application"
+    metadata = {
+      name      = "devops-lab-${var.name}"
+      namespace = var.argocd_namespace
+    }
+    spec = {
+      project = "default"
+      source = {
+        repoURL        = var.repo_url
+        targetRevision = var.target_revision
+        path           = var.kustomize_path
+      }
+      destination = {
+        server    = "https://kubernetes.default.svc"
+        namespace = kubernetes_namespace_v1.this.metadata[0].name
+      }
+      syncPolicy = {
+        automated = {
+          prune    = true
+          selfHeal = true
+        }
+      }
+    }
+  }
+
+  # The pull secret must exist before Argo CD starts creating Pods
+  depends_on = [kubernetes_secret_v1.ghcr]
+}
+```
+
+**`outputs.tf`** (the module's return values)
+```hcl
+output "namespace" {
+  description = "Namespace of this environment"
+  value       = kubernetes_namespace_v1.this.metadata[0].name
+}
+
+output "application_name" {
+  description = "Name of the Argo CD Application"
+  value       = kubernetes_manifest.application.manifest.metadata.name
+}
+```
+
+### Root: `terraform/environments/`
+
+**`versions.tf`**
+```hcl
+terraform {
+  required_version = ">= 1.16"
+
+  required_providers {
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 3.3"
+    }
+  }
+}
+
+# The ROOT configures the provider; the module inherits it automatically.
+provider "kubernetes" {
+  config_path    = "~/.kube/config"
+  config_context = var.kube_context
+}
+```
+
+**`variables.tf`**
+```hcl
+variable "kube_context" {
+  type    = string
+  default = "docker-desktop"
+}
+
+variable "github_user" {
+  type    = string
+  default = "rafaelxfernandes"
+}
+
+variable "repo_url" {
+  type    = string
+  default = "https://github.com/rafaelxfernandes/DevOps-Lab.git"
+}
+
+variable "cr_pat" {
+  description = "Classic PAT with read:packages (same token as terraform/cluster)"
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "cr_pat_revision" {
+  description = "Bump when the token is rotated"
+  type        = number
+  default     = 1
+}
+```
+
+**`main.tf`**
+```hcl
+# Every environment in ONE map. Adding "staging" = adding 3 lines here.
+locals {
+  environments = {
+    dev = {
+      kustomize_path = "kustomize/overlays/dev"
+    }
+    prod = {
+      kustomize_path = "kustomize/overlays/prod"
+    }
+  }
+}
+
+# One module call, instantiated once per map entry (for_each)
+module "env" {
+  source   = "../modules/app-environment"   # a local folder (could also be a git URL or registry module)
+  for_each = local.environments
+
+  name           = each.key                 # "dev" / "prod"
+  kustomize_path = each.value.kustomize_path
+  repo_url       = var.repo_url
+
+  github_user     = var.github_user
+  cr_pat          = var.cr_pat
+  cr_pat_revision = var.cr_pat_revision
+}
+```
+
+**`outputs.tf`**
+```hcl
+# A "for expression": build a map from all module instances
+output "environments" {
+  description = "Namespace and Argo CD Application of each environment"
+  value = {
+    for name, env in module.env : name => {
+      namespace   = env.namespace
+      application = env.application_name
+    }
+  }
+}
+```
+
+### New concepts in T5
+
+| Concept | Meaning |
+|---|---|
+| `module "x" { source = "../modules/…" }` | call a module. `source` can be a local folder, a git URL, or the public Terraform Registry |
+| module **inputs** / **outputs** | its variables / its outputs, read by the caller as `module.env["dev"].namespace` |
+| providers in modules | a module only **declares** providers (`required_providers`); the root **configures** them and the module inherits them |
+| `for_each` with a map | one instance per key: `module.env["dev"]`, `module.env["prod"]` |
+| `each.key` / `each.value` | current map key / value |
+| `validation { }` | custom check on a variable, with your own error message, at plan time |
+| `can(expr)` | true if `expr` works, false if it errors |
+| `{ for k, v in … : k => … }` | **for expression**: build a map or list from another collection |
+| `kubernetes_manifest` | any Kubernetes object in HCL (incl. custom resources like `Application`); needs API access and the CRD at **plan** time |
+| **layered roots** | separate root folders with separate states, applied in order (cluster → environments) |
+
+**`for_each` vs `count`:** `count` (T2) is for on/off switches. For collections use `for_each`: instances are named by **key**. With `count`, removing an item from the middle of a list shifts the indexes and Terraform destroys/recreates the wrong things.
+
+### One owner per object: the overlays lost their `namespace.yaml`
+
+Terraform now creates each namespace (the pull secret must exist **before** Argo CD deploys into it). If the Kustomize overlays also created the namespace, two tools would own the same object, the same conflict as the Argo CD handover in T3. So `kustomize/overlays/{dev,prod}/namespace.yaml` were deleted and removed from each `kustomization.yaml`.
+
+### Commands used
+
+```bash
+cd terraform/environments
+read -s TF_VAR_cr_pat && export TF_VAR_cr_pat
+terraform init                 # "Initializing modules..." → the local module is registered
+terraform fmt -recursive ../
+terraform validate
+terraform plan                 # Plan: 6 to add (3 resources × 2 environments)
+terraform apply
+terraform output environments
+kubectl get applications -n argocd     # devops-lab-dev, devops-lab-prod
+curl http://localhost:8081/            # dev
+curl http://localhost:8082/            # prod
+```
+
+Resource addresses in plans and state now include the module instance:
+
+```
+module.env["dev"].kubernetes_namespace_v1.this
+module.env["dev"].kubernetes_secret_v1.ghcr
+module.env["prod"].kubernetes_manifest.application
+```
+
+### Exercises
+
+| Exercise | Result |
+|---|---|
+| Add `staging = { kustomize_path = "kustomize/overlays/dev" }` to the map | plan: **3 to add**, all under `module.env["staging"]`; remove it again → **3 to destroy**. A new environment = 3 lines. (staging reuses dev's overlay, so both want port 8081: one Service gets it, the other stays `<pending>`) |
+| Rename the key `dev` → `Dev_1` | plan stops with the module's own `validation` error message |
+| Change `newTag` in the prod overlay and merge | prod updates through Argo CD; **Terraform isn't involved** (see the release guide below) |
+
+### Who decides what
+
+| Question | Decided by | Changes how often |
+|---|---|---|
+| *Which environments exist* (namespace, secret, Application) | Terraform (`terraform/environments`) | rarely |
+| *Which version runs in each environment* | git (overlays / Helm values) + Argo CD | every release |
+
+Infrastructure and versions are deliberately separated: a release never needs `terraform apply`.
+
+### Other ways companies organize environments
+
+| Pattern | How | When |
+|---|---|---|
+| **one root + `for_each`** (this lab) | all environments in one state | small setups; simple, but one `apply` touches every environment |
+| **one root folder per environment** | `envs/dev/main.tf`, `envs/prod/main.tf`, each calling the same module | the most common: separate state, a mistake in dev can't touch prod |
+| **same code + `.tfvars` files** | `terraform apply -var-file=prod.tfvars`, separate state per environment | common with remote backends. Note: this repo's `.gitignore` ignores `*.tfvars` (they can hold secrets); teams using this commit non-secret tfvars and ignore only secret ones |
+| **workspaces** | `terraform workspace new prod`: same code, one state per workspace | simple, but easy to apply to the wrong workspace |
+
+### Releases with three deployment targets
+
+The complete step-by-step release guide (main app, dev, prod) is in the [README](../README.md#how-to-release--roll-back--change-the-platform-day-to-day). Summary:
+
+```
+git tag v1.6.0 ──► CI ──► "Deploy 1.6.0" PR (Helm values + dev overlay) ──► merge
+                                                   │
+                         Argo CD: main app + dev → 1.6.0
+                                                   │
+                         test in dev ──► one-line PR on the prod overlay ──► merge
+                                                   │
+                         Argo CD: prod → 1.6.0
+```
+
+---
+
 ## Concepts reference
 
 | Concept | Meaning |
@@ -1088,6 +1467,8 @@ A GitHub **environment** with required reviewers pauses the job until someone ap
 | **Handover** | `lifecycle { ignore_changes = all }`: Terraform creates, another tool owns |
 | **Backend** | where state is stored: local file (default) or remote (HCP Terraform, S3…) with locking |
 | **Locking** | prevents two runs from changing the same state at once |
+| **Module** | a reusable folder of `.tf` files with inputs (variables) and outputs |
+| **`for_each`** | one instance per key of a map/set, addressed as `resource["key"]` |
 
 ## Terraform vs OpenTofu
 

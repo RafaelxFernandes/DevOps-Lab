@@ -8,7 +8,7 @@ The app is deliberately tiny (a Flask app with two endpoints) so the focus stays
 - **Part 1 (steps 1–5 + bonus):** everything done **by hand** to understand each piece.
 - **Part 2 (steps 6–8):** replacing the manual parts with the tools companies use in real life.
 - **Part 3 (step 9):** the "platform team" view: the whole platform rebuilt from git with **one command**, and Argo CD managing itself.
-- **Part 4 (Terraform, T1–T5):** infrastructure as code, starting with the GitHub repo's own settings.
+- **Part 4 (Terraform, T1–T5):** infrastructure as code: the GitHub repo's settings, the cluster bootstrap, CI checks, and dev/prod environments built from a module.
 
 ```
 developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
@@ -32,7 +32,7 @@ developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
 | [Part 1: by hand](docs/part1-by-hand.md) | steps 1–5 + bonus: app, Docker, GitHub Actions, ghcr.io, Kubernetes, kind in CI |
 | [Part 2: real-world tools](docs/part2-real-world-tools.md) | steps 6–8: Helm, automated version-bump PR, Argo CD |
 | [Part 3: platform as code](docs/part3-platform-as-code.md) | step 9: bootstrap script, app of apps, Argo CD managing itself |
-| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`), T3 cluster bootstrap (Helm + Kubernetes providers, secrets in state), T4 Terraform checks in CI (+ remote state guide) |
+| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`), T3 cluster bootstrap (Helm + Kubernetes providers, secrets in state), T4 Terraform checks in CI (+ remote state guide), T5 modules + dev/prod environments |
 | [CI/CD pipeline](docs/ci-pipeline.md) | the complete `ci.yml`, annotated |
 | [Cheat sheet](docs/cheat-sheet.md) | the commands I use most |
 | [Troubleshooting](docs/troubleshooting.md) | problems I hit, causes and fixes |
@@ -131,26 +131,72 @@ Easiest and cleanest: Docker Desktop → **Settings → Kubernetes → Reset Kub
 
 ## How to release / roll back / change the platform (day-to-day)
 
-### Release
+### Where the app runs
 
+| Target | URL | Version is set in | Updated by |
+|---|---|---|---|
+| **main app** | `localhost:8080` | `charts/devops-lab/values.yaml` (`image.tag`) | the automated "Deploy x.y.z" PR |
+| **dev** | `localhost:8081` | `kustomize/overlays/dev/kustomization.yaml` (`newTag`) | the same automated PR |
+| **prod** | `localhost:8082` | `kustomize/overlays/prod/kustomization.yaml` (`newTag`) | **a human**, with a one-line promotion PR |
+
+Rule of thumb: *dev follows every release automatically, prod is promoted on purpose.* Terraform is **never** part of a release: it only creates the environments ([Terraform T5](docs/terraform.md#step-t5--modules-and-environments)).
+
+### Release a new version, step by step (example: 1.6.0)
+
+**1. Change the code** (on a branch + PR, or directly on `main`):
 ```bash
-# 1. Code change + tests → commit → push (or PR → merge)
+# edit app.py (and test_app.py if the behaviour changed)
 git add . && git commit -m "Describe the change" && git push
+```
+Wait for the green **CI** run (tests, Docker build, Kubernetes test).
 
-# 2. Tag the release
+**2. Tag the release:**
+```bash
 git tag v1.6.0 && git push origin v1.6.0
 ```
+CI runs again on the tag: tests → build → k8s-test → **publish** image `ghcr.io/rafaelxfernandes/devops-lab:1.6.0` → **bump-version** opens the PR **"Deploy 1.6.0"**.
 
-3. Wait for the green pipeline → open the **"Deploy 1.6.0"** PR → check *Files changed* (2 lines) → **Merge**.
-4. Argo CD deploys it (or click **Refresh** in the UI). Verify: `curl http://localhost:8080/`.
-5. `git pull` locally to stay up to date.
+**3. Review and merge the "Deploy 1.6.0" PR.** *Files changed* shows **3 lines**:
+- `charts/devops-lab/values.yaml`: `tag: 1.6.0` (main app)
+- `charts/devops-lab/Chart.yaml`: `appVersion: 1.6.0`
+- `kustomize/overlays/dev/kustomization.yaml`: `newTag: 1.6.0` (dev)
+
+**4. Argo CD deploys main app + dev** (within ~1–2 min, or click **Refresh** in the UI):
+```bash
+curl http://localhost:8080/     # main app → 1.6.0
+curl http://localhost:8081/     # dev      → 1.6.0
+curl http://localhost:8082/     # prod     → still the previous version
+```
+
+**5. Test in dev.** Anything wrong → fix the code and release `v1.6.1` (start again at step 1), or roll back (below).
+
+**6. Promote to prod** with a one-line PR:
+```bash
+git pull                                    # get the merged bump first
+git checkout -b promote-prod-1.6.0
+# edit kustomize/overlays/prod/kustomization.yaml → newTag: "1.6.0"
+git commit -am "Promote 1.6.0 to prod"
+git push -u origin promote-prod-1.6.0
+```
+Open the PR on GitHub, merge it.
+
+**7. Argo CD deploys prod:** `curl http://localhost:8082/` → 1.6.0.
+
+**8. Keep your local copy up to date:** `git checkout main && git pull`.
+
+> Nothing to do in Terraform, Helm or kubectl: every change is a PR, and Argo CD applies it.
 
 ### Roll back
 
-1. On GitHub, open the merged **"Deploy x.y.z"** PR → **Revert** → merge the revert PR.
-2. Argo CD syncs back to the previous version.
+| What to roll back | How |
+|---|---|
+| main app + dev (a bad release) | on GitHub, open the merged **"Deploy x.y.z"** PR → **Revert** → merge the revert PR (reverts all 3 lines) |
+| prod (a bad promotion) | **Revert** the merged promotion PR → merge |
+| only dev | PR changing `newTag` in the dev overlay back to the previous version |
 
-> Don't use `kubectl rollout undo` or `helm rollback` anymore: Argo CD's selfHeal undoes them because git still says the newer version. Git is the only lever.
+Argo CD syncs back to the previous version in each case.
+
+> Don't use `kubectl rollout undo` or `helm rollback`: Argo CD's selfHeal undoes them because git still says the newer version. Git is the only lever.
 
 ### Change the platform
 
@@ -160,6 +206,7 @@ git tag v1.6.0 && git push origin v1.6.0
 | upgrade Argo CD | bump the chart version in **3 places**: `targetRevision` in `argocd/apps/argocd.yaml`, `ARGOCD_CHART_VERSION` in `scripts/bootstrap.sh`, `argocd_chart_version` in `terraform/cluster/variables.tf` (check the chart's release notes first) |
 | add another app | add an Application file to `argocd/apps/` |
 | remove an app | delete its file from `argocd/apps/` |
+| add or remove an **environment** (like dev/prod) | edit the `environments` map in `terraform/environments/main.tf` → `terraform plan` → `terraform apply` ([T5](docs/terraform.md#step-t5--modules-and-environments)) |
 | rebuild everything | Reset Kubernetes cluster in Docker Desktop → `bash scripts/bootstrap.sh` |
 | fix a broken/half-installed setup | `bash scripts/bootstrap.sh` again (idempotent) |
 
@@ -201,8 +248,10 @@ DevOps-Lab/
 ├── terraform/
 │   ├── t1-basics/                  # T1: learning sandbox (a local file)
 │   ├── github/                     # T2: this repo's GitHub settings as code
-│   └── cluster/                    # T3: cluster bootstrap (alternative to scripts/bootstrap.sh)
-├── kustomize/                      # REFERENCE ONLY (not deployed): Kustomize example
+│   ├── cluster/                    # T3: cluster bootstrap (alternative to scripts/bootstrap.sh)
+│   ├── modules/app-environment/    # T5: module = one environment (namespace, secret, Argo CD app)
+│   └── environments/               # T5: dev + prod, built from the module
+├── kustomize/                      # dev/prod overlays (deployed by terraform/environments, T5)
 │   ├── base/                       #   plain YAML shared by every environment
 │   └── overlays/{dev,prod}/        #   per-environment changes
 └── docs/                           # detailed documentation (see table above)

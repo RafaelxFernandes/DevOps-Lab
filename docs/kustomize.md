@@ -203,6 +203,8 @@ The typical multi-environment workflow:
 2. It's tested in dev.
 3. **Promotion** = a PR changing `newTag` in `overlays/prod` to the same version. Reviewed, merged, deployed.
 
+In this repo (since T5), step 1 is automatic: the `bump-version` CI job updates `overlays/dev` in the same "Deploy x.y.z" PR as the Helm chart. Full step-by-step guide: [README → Release](../README.md#how-to-release--roll-back--change-the-platform-day-to-day).
+
 Each environment's version is one line in git, so "what runs where" is always visible, and promotions have history and approvals.
 
 ---

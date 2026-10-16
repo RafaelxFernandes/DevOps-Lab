@@ -173,6 +173,7 @@ Key pieces (full job in [The complete ci.yml, annotated](ci-pipeline.md#the-comp
 | `${GITHUB_REF_NAME#v}` | `v1.4.0` → `1.4.0` (bash: strip leading `v`) |
 | `echo "VERSION=..." >> "$GITHUB_ENV"` | make a variable available to **later steps** |
 | `yq -i '.image.tag = strenv(VERSION)'` | YAML-aware edit (preinstalled on runners) |
+| `(.images[] \| select(.name == "…")).newTag` | (added in T5) yq expression: in the dev overlay's `images` list, pick the entry for our image and set its tag |
 | `gh pr create` | GitHub CLI (preinstalled), authenticated with `GH_TOKEN` |
 | bot identity | `github-actions[bot]` as commit author |
 
