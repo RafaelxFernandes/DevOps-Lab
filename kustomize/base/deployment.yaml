@@ -1,0 +1,45 @@
+# Plain Kubernetes YAML: no templates, no {{ }}.
+# This is valid on its own: `kubectl apply -f kustomize/base/deployment.yaml` would work.
+# The overlays (dev/prod) change only what differs per environment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-lab
+  labels:
+    app.kubernetes.io/name: devops-lab
+spec:
+  replicas: 2                                         # overlays override this
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devops-lab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devops-lab
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret                           # must exist in each target namespace
+      containers:
+        - name: web
+          image: ghcr.io/rafaelxfernandes/devops-lab:1.4.0   # overlays override the tag
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi

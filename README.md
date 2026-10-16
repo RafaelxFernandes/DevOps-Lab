@@ -34,6 +34,7 @@ developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
 | [CI/CD pipeline](docs/ci-pipeline.md) | the complete `ci.yml`, annotated |
 | [Cheat sheet](docs/cheat-sheet.md) | the commands I use most |
 | [Troubleshooting](docs/troubleshooting.md) | problems I hit, causes and fixes |
+| [Kustomize (reference)](docs/kustomize.md) | Helm's alternative: base + dev/prod overlays, compared with Helm values files |
 
 ---
 
@@ -176,8 +177,12 @@ DevOps-Lab/
 ├── platform/
 │   └── argocd/
 │       └── values.yaml             # Argo CD's own configuration
-└── scripts/
-    └── bootstrap.sh                # rebuilds the whole platform with one command
+├── scripts/
+│   └── bootstrap.sh                # rebuilds the whole platform with one command
+├── kustomize/                      # REFERENCE ONLY (not deployed): Kustomize example
+│   ├── base/                       #   plain YAML shared by every environment
+│   └── overlays/{dev,prod}/        #   per-environment changes
+└── docs/                           # detailed documentation (see table above)
 ```
 
 > The annotated file copies in [`docs/`](docs/) explain each line. The real files in the repo are always the source of truth (e.g. the greeting text and the current version change over time).
@@ -188,7 +193,6 @@ DevOps-Lab/
 
 - **Argo Rollouts**: canary releases (send 10% of traffic to the new version, auto-rollback on errors).
 - **Sealed Secrets / External Secrets**: put secrets in git safely (encrypted) or pull them from a vault.
-- **Multiple environments**: `values-dev.yaml` / `values-prod.yaml`, promotion between environments.
+- **Multiple environments for real**: deploy dev + prod with Argo CD and promote versions between them (both ways are sketched in [docs/kustomize.md](docs/kustomize.md)).
 - **GitHub App token** for the bump job so bot PRs get CI checks.
 - **Dependabot**: automatic PRs keeping `actions/*@vX`, base images and pip packages up to date.
-- **Kustomize**: the other common way to vary manifests per environment.

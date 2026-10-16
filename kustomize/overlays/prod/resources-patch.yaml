@@ -1,0 +1,19 @@
+# Strategic merge patch: looks like a piece of the real resource.
+# Kustomize finds the Deployment "devops-lab", then the container named "web",
+# and merges ONLY these fields into it. Everything else stays as in the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-lab
+spec:
+  template:
+    spec:
+      containers:
+        - name: web                # containers are matched by name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

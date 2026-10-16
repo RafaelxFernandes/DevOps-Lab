@@ -48,3 +48,11 @@ helm lint charts/devops-lab
 helm template devops-lab charts/devops-lab
 helm template devops-lab charts/devops-lab --set image.tag=9.9.9   # preview a change
 ```
+
+### Kustomize (reference example in `kustomize/`)
+```bash
+kubectl kustomize kustomize/overlays/dev       # render (like helm template)
+kubectl apply -k kustomize/overlays/dev        # render + apply
+kubectl diff -k kustomize/overlays/prod        # what would change
+diff <(kubectl kustomize kustomize/overlays/dev) <(kubectl kustomize kustomize/overlays/prod)
+```

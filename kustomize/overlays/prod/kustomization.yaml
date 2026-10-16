@@ -1,0 +1,34 @@
+# PROD overlay: same base, different settings.
+# Render it:  kubectl kustomize kustomize/overlays/prod
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: devops-lab-prod
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+labels:
+  - pairs:
+      environment: prod
+    includeTemplates: true
+
+images:
+  - name: ghcr.io/rafaelxfernandes/devops-lab
+    newTag: "1.4.0"                # prod stays on the PROVEN version
+                                   # promotion = PR changing this to the dev version
+
+replicas:
+  - name: devops-lab
+    count: 3                       # prod: more copies
+
+patches:
+  - path: resources-patch.yaml     # strategic merge patch (a file): more CPU/memory
+  - target:                        # JSON 6902 patch (inline): another port
+      kind: Service
+      name: devops-lab
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8082                # prod on localhost:8082

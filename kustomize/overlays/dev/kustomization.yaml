@@ -1,0 +1,34 @@
+# DEV overlay: "take the base, and change only these things".
+# Render it:  kubectl kustomize kustomize/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: devops-lab-dev          # put EVERY resource in this namespace
+
+resources:
+  - ../../base                     # start from the shared base
+  - namespace.yaml                 # + create the namespace itself
+
+labels:                            # add this label to every resource...
+  - pairs:
+      environment: dev
+    includeTemplates: true         # ...and to the Pods (pod template) too
+    # includeSelectors stays false: never change selectors (they're immutable)
+
+images:                            # change the image tag without editing the base
+  - name: ghcr.io/rafaelxfernandes/devops-lab
+    newTag: "1.5.0"                # dev runs the NEWER version first
+
+replicas:                          # change the replica count
+  - name: devops-lab
+    count: 1                       # dev: 1 Pod is enough
+
+patches:                           # anything else: a patch
+  # JSON 6902 patch: precise operations on a path (replace / add / remove)
+  - target:
+      kind: Service
+      name: devops-lab
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8081                # dev on localhost:8081

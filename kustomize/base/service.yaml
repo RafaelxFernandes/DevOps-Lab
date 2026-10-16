@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-lab
+  labels:
+    app.kubernetes.io/name: devops-lab
+spec:
+  type: LoadBalancer        # Docker Desktop exposes it on localhost
+  selector:
+    app.kubernetes.io/name: devops-lab
+  ports:
+    - port: 8080            # overlays change it so dev/prod don't clash with the live app
+      targetPort: 5000
