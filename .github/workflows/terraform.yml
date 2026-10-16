@@ -1,0 +1,72 @@
+name: Terraform
+
+on:
+  pull_request:
+    paths:                                  # only run when Terraform code changes
+      - "terraform/**"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read                            # workflow-level default: read-only for every job
+
+env:
+  TF_VERSION: "1.16.6"                      # same Terraform version everywhere
+
+jobs:
+  # ── 1. Formatting: one job for the whole terraform/ folder ──────────
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff terraform/
+        # -check: don't change files, just fail if they need formatting
+        # -diff: show exactly what is wrong in the log
+
+  # ── 2. Validate each configuration separately ───────────────────────
+  validate:
+    name: validate (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false                      # one broken folder doesn't cancel the others
+      matrix:
+        dir:
+          - terraform/t1-basics
+          - terraform/github
+          - terraform/cluster
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}   # every "run:" step starts in that folder
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: Init (providers only, no state)
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate
+
+  # ── 3. Lint everything with TFLint ──────────────────────────────────
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: terraform-linters/setup-tflint@v6
+      - name: Install TFLint plugins
+        run: tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+      - name: Lint all Terraform folders
+        run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
