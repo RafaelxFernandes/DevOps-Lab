@@ -35,7 +35,6 @@ jobs:
   k8s-test:
     runs-on: ubuntu-latest
     needs: docker
-
     steps:
       - uses: actions/checkout@v7
 
@@ -49,19 +48,17 @@ jobs:
           docker build -t devops-lab:ci .
           kind load docker-image devops-lab:ci --name ci
 
-      - name: Create namespace
-        run: kubectl create namespace devops-lab
+      - name: Lint chart
+        run: helm lint charts/devops-lab
 
-      - name: Validate manifests against the real API server
-        run: kubectl apply --dry-run=server -f k8s/
-
-      - name: Deploy (swap in the image we just built)
+      - name: Deploy with Helm (using the image we just built)
         run: |
-          sed "s|image: ghcr.io/.*|image: devops-lab:ci|" k8s/deployment.yaml > /tmp/deployment.yaml
-          kubectl apply -f /tmp/deployment.yaml -f k8s/service.yaml
-
-      - name: Wait for the rollout
-        run: kubectl rollout status deployment/devops-lab -n devops-lab --timeout=120s
+          helm upgrade --install devops-lab charts/devops-lab \
+            --namespace devops-lab --create-namespace \
+            --set image.repository=devops-lab \
+            --set image.tag=ci \
+            --set service.type=ClusterIP \
+            --wait --timeout 2m
 
       - name: Smoke test
         run: |
