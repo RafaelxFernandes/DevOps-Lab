@@ -32,7 +32,7 @@ developer ─► PR ─► CI tests ─► merge ─► git tag v1.x.0
 | [Part 1: by hand](docs/part1-by-hand.md) | steps 1–5 + bonus: app, Docker, GitHub Actions, ghcr.io, Kubernetes, kind in CI |
 | [Part 2: real-world tools](docs/part2-real-world-tools.md) | steps 6–8: Helm, automated version-bump PR, Argo CD |
 | [Part 3: platform as code](docs/part3-platform-as-code.md) | step 9: bootstrap script, app of apps, Argo CD managing itself |
-| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`), T3 cluster bootstrap (Helm + Kubernetes providers, secrets in state) |
+| [Part 4: Terraform](docs/terraform.md) | T1 basics (plan/apply/state/drift), T2 GitHub repo as code (import, safety nets, `count`), T3 cluster bootstrap (Helm + Kubernetes providers, secrets in state), T4 Terraform checks in CI (+ remote state guide) |
 | [CI/CD pipeline](docs/ci-pipeline.md) | the complete `ci.yml`, annotated |
 | [Cheat sheet](docs/cheat-sheet.md) | the commands I use most |
 | [Troubleshooting](docs/troubleshooting.md) | problems I hit, causes and fixes |
@@ -176,9 +176,11 @@ DevOps-Lab/
 ├── .dockerignore                   # Files Docker must NOT copy into the image
 ├── .gitignore                      # Files git must NOT track
 ├── .gitattributes                  # Forces LF line endings for *.sh (Windows safety)
+├── .tflint.hcl                     # TFLint configuration (T4)
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                  # The whole CI/CD pipeline
+│       ├── ci.yml                  # The app CI/CD pipeline
+│       └── terraform.yml           # Terraform checks: fmt, validate, tflint (T4)
 ├── charts/
 │   └── devops-lab/                 # Helm chart (replaced the old k8s/ folder in step 6)
 │       ├── Chart.yaml              # chart metadata + appVersion

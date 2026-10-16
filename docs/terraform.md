@@ -14,6 +14,7 @@ Terraform describes infrastructure in files and makes reality match them: it cre
 - [Step T1 – Basics with a local file](#step-t1--basics-with-a-local-file)
 - [Step T2 – The GitHub repo as code](#step-t2--the-github-repo-as-code)
 - [Step T3 – Cluster bootstrap with Terraform](#step-t3--cluster-bootstrap-with-terraform)
+- [Step T4 – Terraform in CI](#step-t4--terraform-in-ci)
 - [Concepts reference](#concepts-reference)
 - [Terraform vs OpenTofu](#terraform-vs-opentofu)
 
@@ -133,8 +134,8 @@ Same idea as Argo CD (desired state in git → reality), one layer lower. One di
 | T1 | install, `init → plan → apply → destroy`, state, drift | ✅ |
 | T2 | GitHub provider: repo settings as code, `import`, safety nets, `count` | ✅ |
 | T3 | Helm + Kubernetes providers: cluster bootstrap with Terraform, secrets in state | ✅ |
-| T4 | Terraform in CI: `fmt` / `validate` / `plan` on PRs, remote state | next |
-| T5 | modules + per-environment variables | |
+| T4 | Terraform in CI: `fmt` / `validate` / TFLint on PRs (part A); remote state + `plan` in CI (part B) | ✅ part A · 📘 part B documented |
+| T5 | modules + per-environment variables | next |
 
 ---
 
@@ -810,6 +811,266 @@ Keep them equal. If they differ, a fresh install deploys one version and Argo CD
 
 ---
 
+## Step T4 – Terraform in CI
+
+Two parts:
+
+| Part | What | Status |
+|---|---|---|
+| **A** | `fmt` / `validate` / TFLint on every PR: no credentials, no state | ✅ implemented |
+| **B** | remote state + `terraform plan` on PRs (+ optional apply on merge) | 📘 documented for the future; needs an extra account (decided not to create one for now) |
+
+### Part A – Checks on every Terraform PR
+
+| Check | Catches | Needs credentials or state? |
+|---|---|---|
+| `terraform fmt -check` | badly formatted files | no |
+| `terraform validate` | syntax errors, wrong types, unknown references | no |
+| **TFLint** | unused variables, missing version pins, deprecated syntax | no |
+
+#### `.tflint.hcl` (repo root)
+
+```hcl
+# TFLint: a linter for Terraform (like flake8/eslint for HCL)
+plugin "terraform" {
+  enabled = true
+  preset  = "recommended"   # built-in rules: unused declarations, version pins, deprecated syntax…
+}
+```
+
+#### `.github/workflows/terraform.yml`
+
+```yaml
+name: Terraform
+
+on:
+  pull_request:
+    paths:                                  # only run when Terraform code changes
+      - "terraform/**"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".tflint.hcl"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read                            # workflow-level default: read-only for every job
+
+env:
+  TF_VERSION: "1.16.6"                      # same Terraform version everywhere
+
+jobs:
+  # ── 1. Formatting: one job for the whole terraform/ folder ──────────
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff terraform/
+        # -check: don't change files, just fail if they need formatting
+        # -diff: show exactly what is wrong in the log
+
+  # ── 2. Validate each configuration separately ───────────────────────
+  validate:
+    name: validate (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false                      # one broken folder doesn't cancel the others
+      matrix:
+        dir:
+          - terraform/t1-basics
+          - terraform/github
+          - terraform/cluster
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}   # every "run:" step starts in that folder
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: Init (providers only, no state)
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate
+
+  # ── 3. Lint everything with TFLint ──────────────────────────────────
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: terraform-linters/setup-tflint@v6
+      - name: Install TFLint plugins
+        run: tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+      - name: Lint all Terraform folders
+        run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+```
+
+#### New concepts in part A
+
+| Concept | Meaning |
+|---|---|
+| **separate workflow file** | Terraform checks are independent from the app pipeline (`ci.yml`), with their own triggers |
+| `paths:` filter | the workflow runs only when matching files change |
+| `permissions:` at **workflow** level | default for all jobs; read-only is enough |
+| `env:` at workflow level | one `TF_VERSION` for every job |
+| `defaults.run.working-directory` | all `run:` steps of the job start in that folder |
+| matrix over **folders** | same job once per Terraform configuration, in parallel |
+| `fail-fast: false` | one failing matrix job doesn't cancel the others |
+| `terraform init -backend=false` | downloads providers without touching state: validation needs no state and no credentials |
+| `$GITHUB_WORKSPACE` | absolute path of the checked-out repo |
+
+#### How to use it
+
+```bash
+terraform fmt -recursive terraform/     # before committing: fix formatting locally
+```
+
+Exercises on a PR branch:
+- **Formatting:** extra spaces in a `.tf` file → `terraform fmt` job fails, the log shows the `-diff` → fix with `terraform fmt -recursive terraform/`.
+- **Validation:** typo in a variable reference (e.g. `var.argocd_chart_versio`) → only `validate (terraform/cluster)` fails with `Reference to undeclared input variable`; the other two still pass (`fail-fast: false`).
+- **TFLint:** if it flags something, read the rule name in the message; the rule docs explain the fix.
+
+#### Why these checks aren't *required* on `main`
+
+A ruleset can require status checks before merging. Two reasons not to here:
+1. **`paths` filter pitfall:** a required check that **never runs** (the PR didn't touch `terraform/`) blocks that PR forever. Teams solve it with an always-running "gate" job that succeeds when nothing relevant changed and otherwise depends on the real checks.
+2. **The bump PR has no checks at all** (the `GITHUB_TOKEN` rule, see [setup-and-tokens.md](setup-and-tokens.md#github_token-automatic-used-by-ci)). Real fix: a GitHub App token for the bump job.
+
+### Part B – Remote state and `plan` in CI (for the future)
+
+**Not implemented.** This section is a ready-to-follow guide for when it's wanted.
+
+#### The problem with local state
+
+`terraform.tfstate` currently lives on the laptop, so:
+- CI **can't run `terraform plan`**: it doesn't have the state
+- laptop lost → state lost → Terraform forgets what it manages
+- no **locking**: two people (or a person + CI) applying at once can corrupt it
+- the state's secrets are only as safe as the laptop
+
+#### Remote backends
+
+A **backend** is where Terraform keeps state. Remote backends add sharing, encryption, **locking** and history.
+
+| Backend | Typical user | Cost / requirement |
+|---|---|---|
+| **HCP Terraform** (`cloud` block) | teams wanting a managed service with run history UI | HashiCorp account; a free tier exists (described by third parties as 500 managed resources since March 2026: check current terms) |
+| **AWS S3** (`backend "s3"`) | AWS companies (most common overall) | AWS account; tiny storage cost |
+| **Azure Storage** (`backend "azurerm"`) | Azure companies | Azure account |
+| **Google Cloud Storage** (`backend "gcs"`) | Google Cloud companies | GCP account |
+| **Kubernetes** (`backend "kubernetes"`) | state in a Secret inside a cluster | not reachable from GitHub runners for a local cluster |
+
+**Scope for this repo:** only `terraform/github` would move. `terraform/cluster` stays local: GitHub's runners can't reach the Kubernetes cluster on the PC, so CI could never plan it anyway.
+
+#### Option 1: HCP Terraform
+
+1. Sign up at app.terraform.io, create an **organization** and a workspace (e.g. `devops-lab-github`, "CLI-driven workflow").
+2. In the workspace settings, set **Execution mode: Local**, so HCP Terraform only stores state and runs happen on my PC / in GitHub Actions (with the default *Remote* mode, runs execute on HashiCorp's servers and the GitHub token would have to be stored there as a workspace variable).
+3. Add to `terraform/github/versions.tf`, inside the `terraform { }` block:
+   ```hcl
+   cloud {
+     organization = "<my-org>"
+     workspaces {
+       name = "devops-lab-github"
+     }
+   }
+   ```
+4. Log in and migrate the existing state:
+   ```bash
+   terraform login                  # opens the browser, stores an API token locally
+   cd terraform/github
+   terraform init -migrate-state    # copies local state to HCP Terraform (asks for confirmation)
+   terraform plan                   # must say "No changes": same state, new location
+   ```
+5. Delete the local `terraform.tfstate*` files once the plan is clean.
+
+#### Option 2: AWS S3 (the most common in companies)
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket       = "<my-state-bucket>"          # created once, by hand or by a separate Terraform config
+    key          = "devops-lab/github.tfstate"  # path of this configuration's state inside the bucket
+    region       = "eu-south-1"
+    encrypt      = true                         # encryption at rest
+    use_lockfile = true                         # S3-native locking (Terraform ≥ 1.11): no DynamoDB table needed
+  }
+}
+```
+
+Then the same migration: `terraform init -migrate-state` → `terraform plan` shows "No changes". The bucket should have **versioning** enabled (old states recoverable) and **public access blocked**.
+
+#### `plan` on every PR, posted as a comment
+
+Sketch of a job to add to `terraform.yml` once state is remote (HCP Terraform version):
+
+```yaml
+  plan-github:
+    name: plan (terraform/github)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    #   ↑ only PRs from this repo: fork PRs don't get secrets, and must never be given them
+    permissions:
+      contents: read
+      pull-requests: write                 # to post the plan as a comment
+    defaults:
+      run:
+        working-directory: terraform/github
+    env:
+      GITHUB_TOKEN: ${{ secrets.TF_GITHUB_TOKEN }}   # fine-grained PAT for the GitHub provider (repo secret)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}   # HCP Terraform API token
+          terraform_wrapper: false
+      - run: terraform init -input=false
+      - name: Plan
+        run: terraform plan -no-color -input=false -lock-timeout=60s | tee plan.txt
+      - name: Comment the plan on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}      # the automatic token (only needs pull-requests: write)
+        run: |
+          { echo '### Terraform plan: `terraform/github`'; echo '```'; tail -c 60000 plan.txt; echo '```'; } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment.md
+```
+
+Notes:
+- **Two different tokens:** `TF_GITHUB_TOKEN` (repo secret, admin rights, used by the provider) vs `github.token` (automatic, used only to comment).
+- `-lock-timeout=60s`: wait for the state lock instead of failing if someone else is running Terraform.
+- **Public repo security:** never use the `pull_request_target` trigger to run Terraform on PR code: it runs with secrets on code written by strangers. The `if:` above skips fork PRs.
+
+#### Optional: apply on merge
+
+```yaml
+  apply-github:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: terraform-github     # Settings → Environments: add "Required reviewers" = manual approval
+    # … same setup as plan-github, then:
+    #   terraform apply -auto-approve -input=false
+```
+
+A GitHub **environment** with required reviewers pauses the job until someone approves it: "plan on PR, approve, apply on merge" is the classic company flow.
+
+#### Going further (company practices)
+
+- **OIDC instead of long-lived tokens:** GitHub Actions can get short-lived cloud credentials (AWS/Azure/GCP) without storing any secret.
+- **Policy as code:** tools like OPA/Conftest, or HCP Terraform policies, block plans that break rules (e.g. "no public buckets").
+- **Drift detection:** a scheduled workflow runs `terraform plan` nightly and alerts if reality changed.
+
+---
+
 ## Concepts reference
 
 | Concept | Meaning |
@@ -825,6 +1086,8 @@ Keep them equal. If they differ, a fresh install deploys one version and Argo CD
 | **Lock file** | `.terraform.lock.hcl`: exact provider versions; committed |
 | **Sensitive / ephemeral / write-only** | hidden on screen / never stored in plan or state / sent to the API but never stored |
 | **Handover** | `lifecycle { ignore_changes = all }`: Terraform creates, another tool owns |
+| **Backend** | where state is stored: local file (default) or remote (HCP Terraform, S3…) with locking |
+| **Locking** | prevents two runs from changing the same state at once |
 
 ## Terraform vs OpenTofu
 

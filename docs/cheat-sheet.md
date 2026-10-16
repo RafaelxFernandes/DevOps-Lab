@@ -71,4 +71,7 @@ terraform apply -var 'enable_main_protection=false'   # override a variable once
 terraform apply -replace=kubernetes_secret_v1.ghcr    # force recreate one resource
 read -s TF_VAR_cr_pat && export TF_VAR_cr_pat         # set a Terraform variable from the env (T3)
 grep -c "$TF_VAR_cr_pat" terraform.tfstate            # check a secret is NOT in state (expect 0)
+terraform fmt -recursive terraform/                   # format everything before committing (CI checks it)
+terraform init -backend=false                         # providers only, no state (what CI does)
+tflint --recursive --config "$(pwd)/.tflint.hcl"      # lint locally (if TFLint is installed)
 ```
