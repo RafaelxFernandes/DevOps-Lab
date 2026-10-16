@@ -25,7 +25,7 @@ variable "cr_pat" {
   description = "Classic PAT with read:packages (image pulls)"
   type        = string
   sensitive   = true
-  ephemeral   = true          # never stored in plan or state
+  ephemeral   = true # never stored in plan or state
 }
 
 variable "gh_repo_pat" {
