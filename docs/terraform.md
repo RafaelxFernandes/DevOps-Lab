@@ -6,6 +6,8 @@ Terraform describes infrastructure in files and makes reality match them: it cre
 
 **Contents**
 
+- [What Terraform is and why companies use it](#what-terraform-is-and-why-companies-use-it)
+- [How Terraform works](#how-terraform-works)
 - [Where Terraform fits](#where-terraform-fits)
 - [Roadmap](#roadmap)
 - [Setup](#setup)
@@ -13,6 +15,101 @@ Terraform describes infrastructure in files and makes reality match them: it cre
 - [Step T2 – The GitHub repo as code](#step-t2--the-github-repo-as-code)
 - [Concepts reference](#concepts-reference)
 - [Terraform vs OpenTofu](#terraform-vs-opentofu)
+
+---
+
+## What Terraform is and why companies use it
+
+**Infrastructure as Code (IaC)** means describing infrastructure (servers, Kubernetes clusters, networks, DNS records, databases, permissions, repository settings…) in **text files kept in git**, instead of creating it by clicking in web consoles.
+
+Terraform (by HashiCorp) is the most widely used IaC tool. You write **what you want**; Terraform works out **how** to get there.
+
+### Clicking vs code
+
+| Clicking in a web console | Terraform |
+|---|---|
+| nobody remembers exactly what was clicked, or why | every setting is in a file, with git history (who, when, why) |
+| rebuilding an environment = hours of clicking, easy to forget a step | `terraform apply` rebuilds it identically |
+| dev and prod slowly drift apart | the same code (with different variables) creates both |
+| a change goes live the moment you click | a change is a **PR**: reviewed, with a `plan` showing its exact effect |
+| deleting a test environment: hope you find everything | `terraform destroy` removes everything it created |
+| one console per platform | one language for AWS, Azure, Google, GitHub, Kubernetes, DNS… |
+
+### Declarative, not step-by-step
+
+A script says **how**: "create a repo, then enable this, then add that". Run it twice and it fails ("already exists").
+
+Terraform is **declarative**: it says **what the end result is**. Terraform compares it with reality and does only what's missing. Running it twice is safe: the second time there's nothing to do. Kubernetes YAML and Argo CD work the same way, which is why this felt familiar.
+
+### What companies typically manage with it
+
+- the **cloud account**: networks, firewalls, permissions (IAM)
+- the **Kubernetes cluster itself** (EKS, AKS, GKE) and its node pools
+- **managed services** next to the cluster: databases, storage buckets, queues, DNS, certificates
+- **SaaS settings**: GitHub repos and teams, monitoring dashboards and alerts, and more
+- sometimes the **cluster bootstrap** (Argo CD install, base secrets), which is step T3 here
+
+It's one of the most requested skills in DevOps / platform engineering job ads.
+
+---
+
+## How Terraform works
+
+### The pieces
+
+```
+your .tf files (HCL)         →  what you want
+        │
+        ▼
+Terraform core               →  compares and plans
+        │       ▲
+        │       └── state file  (what Terraform created last time, with IDs)
+        ▼
+providers (plugins)          →  translate into API calls
+        │
+        ▼
+real platforms               →  GitHub API, AWS API, Kubernetes API, your disk…
+```
+
+| Piece | What it is |
+|---|---|
+| **HCL** | HashiCorp Configuration Language: the `.tf` files. Declarative, readable, with variables, references and expressions |
+| **Terraform core** | the `terraform` program: reads the code, builds a dependency graph, plans, applies |
+| **Providers** | plugins downloaded by `terraform init`, one per platform (`integrations/github`, `hashicorp/aws`, …). Terraform itself knows nothing about GitHub; the provider does |
+| **Resources** | the objects you declare (`resource "github_repository" "devops_lab"`) |
+| **State** | a JSON file mapping each resource in the code to the real object it created (IDs, attributes) |
+
+### What happens on `plan` and `apply`
+
+1. **Read the code** and build a **dependency graph** from the references. For example, the ruleset uses `github_repository.devops_lab.name`, so the repo comes first. Independent resources run in parallel.
+2. **Refresh**: ask each provider what the real objects look like *now*.
+3. **Diff** three things:
+   ```
+   code (desired)   ←→   state (what I manage)   ←→   reality (what exists)
+   ```
+4. **Plan**: list the actions needed (`+` create, `~` update, `-` destroy, `-/+` replace).
+5. **Apply**: call the platform APIs through the providers, in graph order, and save the result into **state**.
+
+### Why state exists
+
+Reality alone isn't enough. Without state, Terraform couldn't tell:
+- which real objects **it** manages (versus things created by hand or by other tools), and
+- that a resource **deleted from the code** should be destroyed in reality.
+
+That's why state is precious and sensitive:
+- **lose it** → Terraform forgets what it manages (the next plan wants to create everything again)
+- **commit it** → anyone with repo access can read whatever it contains, including secrets, in plain text
+- **two people applying at once** → corrupted state. Teams keep it in a **remote backend** (S3, Azure Storage, Terraform Cloud…) with **locking**. That's step T4.
+
+### Terraform vs Argo CD vs Ansible
+
+| | Terraform | Argo CD | Ansible |
+|---|---|---|---|
+| Manages | infrastructure (cloud, SaaS settings) | apps inside Kubernetes | configuration inside servers (packages, files) |
+| When it acts | only when you run `plan`/`apply` (or CI does) | continuously | when you run a playbook |
+| Style | declarative + state | declarative, git = state | mostly step-by-step tasks |
+
+Ansible isn't used in this lab; it's in the table because job ads often list it next to Terraform.
 
 ---
 
