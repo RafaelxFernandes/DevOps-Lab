@@ -1,3 +1,11 @@
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Terraform
+.terraform/            # downloaded providers (like node_modules)
+*.tfstate              # state: may contain secrets, never commit
+*.tfstate.*            # state backups
+*.tfvars               # variable values: may contain tokens
+crash.log
+terraform/t1-basics/hello.txt
