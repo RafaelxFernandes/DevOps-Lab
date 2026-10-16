@@ -4,6 +4,8 @@
 
 Every job and step of `.github/workflows/ci.yml`, explained line by line.
 
+> The repo has a second workflow, `.github/workflows/terraform.yml` (Terraform fmt / validate / TFLint), documented in [terraform.md](terraform.md#step-t4--terraform-in-ci).
+
 ## The complete `ci.yml`, annotated
 
 ```yaml
