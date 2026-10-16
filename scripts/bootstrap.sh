@@ -39,7 +39,7 @@ cd "$(dirname "$0")/.."
 # --- 1. Prerequisites ---------------------------------------------------------
 step "1/7 Checking prerequisites"
 for cmd in kubectl helm; do
-  command -v "$cmd" >/dev/null 2>&1 || fail "'$cmd' not found. Install it first (README section 2)."
+  command -v "$cmd" >/dev/null 2>&1 || fail "'$cmd' not found. Install it first (docs/setup-and-tokens.md)."
   ok "$cmd found"
 done
 
@@ -63,7 +63,7 @@ fi
 if [[ -z "${GH_REPO_PAT:-}" ]]; then
   read -rsp "    GH_REPO_PAT (fine-grained, Contents read-only): " GH_REPO_PAT; echo
 fi
-[[ -n "$CR_PAT" && -n "$GH_REPO_PAT" ]] || fail "Both tokens are required (README section 4)."
+[[ -n "$CR_PAT" && -n "$GH_REPO_PAT" ]] || fail "Both tokens are required (docs/setup-and-tokens.md)."
 ok "tokens received (kept in memory only)"
 
 # --- 3. Namespaces ------------------------------------------------------------
