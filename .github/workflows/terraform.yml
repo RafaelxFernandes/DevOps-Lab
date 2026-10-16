@@ -46,6 +46,8 @@ jobs:
           - terraform/t1-basics
           - terraform/github
           - terraform/cluster
+          - terraform/environments
+          - terraform/modules/app-environment
     defaults:
       run:
         working-directory: ${{ matrix.dir }}   # every "run:" step starts in that folder

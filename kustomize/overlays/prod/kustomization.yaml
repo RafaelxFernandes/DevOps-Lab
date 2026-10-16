@@ -6,8 +6,7 @@ kind: Kustomization
 namespace: devops-lab-prod
 
 resources:
-  - ../../base
-  - namespace.yaml
+  - ../../base                     # namespace created by Terraform (T5)
 
 labels:
   - pairs:
